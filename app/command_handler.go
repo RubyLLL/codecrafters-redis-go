@@ -51,6 +51,7 @@ var commandHandlers = map[string]commandHandler{
 	"LRANGE": (*server).handleLrange,
 	"LPUSH":  (*server).handleLpush,
 	"LLEN":   (*server).handleLlen,
+	"LPOP":   (*server).handleLpop,
 }
 
 func newServer() *server {
@@ -269,6 +270,40 @@ func (s *server) handleLlen(args []string) []byte {
 	}
 
 	return encodeInteger(len(entry.value.list))
+}
+
+func (s *server) handleLpop(args []string) []byte {
+	if len(args) != 1 {
+		return encodeSimpleError("ERR wrong number of arguments for 'lpop' command")
+	}
+
+	key := args[0]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.store[key]
+	if !ok {
+		return encodeNullBulkString()
+	}
+	if ok && entry.isExpired(s.now()) {
+		entry = storeEntry{}
+		ok = false
+		delete(s.store, key)
+		return encodeNullBulkString()
+	}
+	if ok && entry.value.typ != listValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	list := entry.value.list
+	if len(list) == 0 {
+		return encodeNullBulkString()
+	}
+	entry.value = redisValue{typ: listValue, list: list[1:]}
+	s.store[key] = entry
+
+	return encodeBulkString(list[0])
 }
 
 func normalizeListRange(start int, end int, length int) (int, int, bool) {
