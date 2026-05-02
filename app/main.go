@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -41,22 +43,17 @@ func handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
 	for {
-		// what we actually receive is *1\r\n$4\r\nping\r\n
-		line1, _ := reader.ReadString('\n') // *1\r\n
-		line2, _ := reader.ReadString('\n') // $4\r\n
-		line3, _ := reader.ReadString('\n') // PING\r\n
-
-		fmt.Println(line1, line2, line3)
-
-		if line3 == "PING\r\n" {
-			_, err := conn.Write(encodeSimpleString("PONG"))
-			if err != nil {
-				return
+		command, err := readRESPCommand(reader)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				fmt.Println("Error reading command: ", err.Error())
 			}
+			return
+		}
+
+		response := handleCommand(command)
+		if _, err := conn.Write(response); err != nil {
+			return
 		}
 	}
-}
-
-func encodeSimpleString(s string) []byte {
-	return []byte("+" + s + "\r\n")
 }
