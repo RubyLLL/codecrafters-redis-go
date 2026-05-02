@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 )
@@ -25,6 +22,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	server := newServer()
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -32,28 +31,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		go handleConnection(conn)
+		go server.handleConnection(conn)
 	}
 
-}
-
-func handleConnection(conn net.Conn) {
-	defer conn.Close()
-
-	reader := bufio.NewReader(conn)
-
-	for {
-		command, err := readRESPCommand(reader)
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				fmt.Println("Error reading command: ", err.Error())
-			}
-			return
-		}
-
-		response := handleCommand(command)
-		if _, err := conn.Write(response); err != nil {
-			return
-		}
-	}
 }

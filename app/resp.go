@@ -134,6 +134,10 @@ func encodeBulkString(s string) []byte {
 	return []byte("$" + strconv.Itoa(len(s)) + "\r\n" + s + "\r\n")
 }
 
+func encodeNullBulkString() []byte {
+	return []byte("$-1\r\n")
+}
+
 func encodeSimpleError(s string) []byte {
 	return []byte("-" + s + "\r\n")
 }
