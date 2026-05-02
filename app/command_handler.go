@@ -50,6 +50,7 @@ var commandHandlers = map[string]commandHandler{
 	"RPUSH":  (*server).handleRpush,
 	"LRANGE": (*server).handleLrange,
 	"LPUSH":  (*server).handleLpush,
+	"LLEN":   (*server).handleLlen,
 }
 
 func newServer() *server {
@@ -250,6 +251,24 @@ func (s *server) handleLpush(args []string) []byte {
 	s.store[key] = entry
 
 	return encodeInteger(len(list))
+}
+
+func (s *server) handleLlen(args []string) []byte {
+	if len(args) != 1 {
+		return encodeSimpleError("ERR wrong number of arguments for 'llen' command")
+	}
+
+	entry, ok := s.getLiveEntry(args[0])
+
+	if !ok {
+		return encodeInteger(0)
+	}
+
+	if entry.value.typ != listValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	return encodeInteger(len(entry.value.list))
 }
 
 func normalizeListRange(start int, end int, length int) (int, int, bool) {
