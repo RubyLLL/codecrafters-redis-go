@@ -188,3 +188,76 @@ func TestServerRejectsInvalidLrange(t *testing.T) {
 		t.Fatalf("LRANGE string key response = %q", got)
 	}
 }
+
+func TestServerHandlesLpopSingleElement(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b"})
+
+	if got := string(server.handleCommand([]string{"LPOP", "items"})); got != "$1\r\na\r\n" {
+		t.Fatalf("LPOP response = %q, want first item", got)
+	}
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "0", "-1"})); got != "*1\r\n$1\r\nb\r\n" {
+		t.Fatalf("remaining list = %q, want only b", got)
+	}
+}
+
+func TestServerHandlesLpopWithCount(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b", "c"})
+
+	if got := string(server.handleCommand([]string{"LPOP", "items", "2"})); got != "*2\r\n$1\r\na\r\n$1\r\nb\r\n" {
+		t.Fatalf("LPOP count response = %q, want first two items", got)
+	}
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "0", "-1"})); got != "*1\r\n$1\r\nc\r\n" {
+		t.Fatalf("remaining list = %q, want only c", got)
+	}
+}
+
+func TestServerHandlesLpopCountPastEnd(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b"})
+
+	if got := string(server.handleCommand([]string{"LPOP", "items", "5"})); got != "*2\r\n$1\r\na\r\n$1\r\nb\r\n" {
+		t.Fatalf("LPOP count past end response = %q, want all items", got)
+	}
+	if got := string(server.handleCommand([]string{"LLEN", "items"})); got != ":0\r\n" {
+		t.Fatalf("LLEN after full LPOP = %q, want zero", got)
+	}
+}
+
+func TestServerHandlesEmptyLpop(t *testing.T) {
+	server := newServer()
+
+	if got := string(server.handleCommand([]string{"LPOP", "missing"})); got != "$-1\r\n" {
+		t.Fatalf("LPOP missing response = %q, want null bulk string", got)
+	}
+	if got := string(server.handleCommand([]string{"LPOP", "missing", "2"})); got != "*-1\r\n" {
+		t.Fatalf("LPOP missing with count response = %q, want null array", got)
+	}
+	server.handleCommand([]string{"RPUSH", "items", "a"})
+	server.handleCommand([]string{"LPOP", "items"})
+	if got := string(server.handleCommand([]string{"LPOP", "items", "0"})); got != "*-1\r\n" {
+		t.Fatalf("LPOP deleted list with count zero response = %q, want null array", got)
+	}
+}
+
+func TestServerRejectsInvalidLpop(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"SET", "name", "redis"})
+
+	tests := [][]string{
+		{"LPOP"},
+		{"LPOP", "items", "1", "2"},
+		{"LPOP", "items", "-1"},
+		{"LPOP", "items", "abc"},
+	}
+
+	for _, command := range tests {
+		if got := string(server.handleCommand(command)); got == "$-1\r\n" || got == "+OK\r\n" {
+			t.Fatalf("command %v succeeded unexpectedly with response %q", command, got)
+		}
+	}
+	if got := string(server.handleCommand([]string{"LPOP", "name"})); got != "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n" {
+		t.Fatalf("LPOP string key response = %q", got)
+	}
+}

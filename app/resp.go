@@ -157,3 +157,7 @@ func encodeArray(list []string) []byte {
 	}
 	return result
 }
+
+func encodeNullArray() []byte {
+	return []byte("*-1\r\n")
+}

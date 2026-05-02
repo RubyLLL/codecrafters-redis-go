@@ -273,23 +273,38 @@ func (s *server) handleLlen(args []string) []byte {
 }
 
 func (s *server) handleLpop(args []string) []byte {
-	if len(args) != 1 {
+	if len(args) < 1 || len(args) > 2 {
 		return encodeSimpleError("ERR wrong number of arguments for 'lpop' command")
 	}
 
 	key := args[0]
+	deleteCount := 1
+	hasCount := len(args) == 2
+	if len(args) == 2 {
+		var err error
+		deleteCount, err = strconv.Atoi(args[1])
+		if err != nil || deleteCount < 0 {
+			return encodeSimpleError("ERR value is out of range, must be positive")
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	entry, ok := s.store[key]
 	if !ok {
+		if hasCount {
+			return encodeNullArray()
+		}
 		return encodeNullBulkString()
 	}
 	if ok && entry.isExpired(s.now()) {
 		entry = storeEntry{}
 		ok = false
 		delete(s.store, key)
+		if hasCount {
+			return encodeNullArray()
+		}
 		return encodeNullBulkString()
 	}
 	if ok && entry.value.typ != listValue {
@@ -298,12 +313,34 @@ func (s *server) handleLpop(args []string) []byte {
 
 	list := entry.value.list
 	if len(list) == 0 {
+		delete(s.store, key)
+		if hasCount {
+			return encodeArray([]string{})
+		}
 		return encodeNullBulkString()
 	}
-	entry.value = redisValue{typ: listValue, list: list[1:]}
-	s.store[key] = entry
+	if deleteCount == 0 {
+		return encodeArray([]string{})
+	}
 
-	return encodeBulkString(list[0])
+	if deleteCount > len(list) {
+		deleteCount = len(list)
+	}
+
+	popped := list[:deleteCount]
+	remaining := list[deleteCount:]
+	if len(remaining) == 0 {
+		delete(s.store, key)
+	} else {
+		entry.value = redisValue{typ: listValue, list: remaining}
+		s.store[key] = entry
+	}
+
+	if !hasCount {
+		return encodeBulkString(popped[0])
+	}
+
+	return encodeArray(popped)
 }
 
 func normalizeListRange(start int, end int, length int) (int, int, bool) {
