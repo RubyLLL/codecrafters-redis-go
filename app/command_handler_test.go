@@ -141,3 +141,50 @@ func TestServerRpushReplacesExpiredStringKey(t *testing.T) {
 		t.Fatalf("entry after RPUSH expired key = %+v", entry)
 	}
 }
+
+func TestServerHandlesLrange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b", "c", "d"})
+
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "1", "2"})); got != "*2\r\n$1\r\nb\r\n$1\r\nc\r\n" {
+		t.Fatalf("LRANGE response = %q, want b and c", got)
+	}
+}
+
+func TestServerHandlesLrangeNegativeIndexes(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b", "c", "d"})
+
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "-2", "-1"})); got != "*2\r\n$1\r\nc\r\n$1\r\nd\r\n" {
+		t.Fatalf("LRANGE negative response = %q, want c and d", got)
+	}
+}
+
+func TestServerHandlesEmptyLrange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b"})
+
+	tests := [][]string{
+		{"LRANGE", "missing", "0", "-1"},
+		{"LRANGE", "items", "10", "20"},
+		{"LRANGE", "items", "1", "0"},
+	}
+
+	for _, command := range tests {
+		if got := string(server.handleCommand(command)); got != "*0\r\n" {
+			t.Fatalf("command %v response = %q, want empty array", command, got)
+		}
+	}
+}
+
+func TestServerRejectsInvalidLrange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"SET", "name", "redis"})
+
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "start", "0"})); got != "-ERR value is not an integer or out of range\r\n" {
+		t.Fatalf("LRANGE invalid index response = %q", got)
+	}
+	if got := string(server.handleCommand([]string{"LRANGE", "name", "0", "-1"})); got != "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n" {
+		t.Fatalf("LRANGE string key response = %q", got)
+	}
+}

@@ -43,11 +43,12 @@ type storeEntry struct {
 type commandHandler func(*server, []string) []byte
 
 var commandHandlers = map[string]commandHandler{
-	"PING":  (*server).handlePing,
-	"ECHO":  (*server).handleEcho,
-	"GET":   (*server).handleGet,
-	"SET":   (*server).handleSet,
-	"RPUSH": (*server).handleRpush,
+	"PING":   (*server).handlePing,
+	"ECHO":   (*server).handleEcho,
+	"GET":    (*server).handleGet,
+	"SET":    (*server).handleSet,
+	"RPUSH":  (*server).handleRpush,
+	"LRANGE": (*server).handleLrange,
 }
 
 func newServer() *server {
@@ -181,6 +182,64 @@ func (s *server) handleRpush(args []string) []byte {
 	s.store[key] = entry
 
 	return encodeInteger(len(list))
+}
+
+func (s *server) handleLrange(args []string) []byte {
+	if len(args) != 3 {
+		return encodeSimpleError("ERR wrong number of arguments for 'lrange' command")
+	}
+
+	key := args[0]
+	start, err := strconv.Atoi(args[1])
+	if err != nil {
+		return encodeSimpleError("ERR value is not an integer or out of range")
+	}
+	end, err := strconv.Atoi(args[2])
+	if err != nil {
+		return encodeSimpleError("ERR value is not an integer or out of range")
+	}
+
+	entry, ok := s.getLiveEntry(key)
+
+	if !ok {
+		return encodeArray([]string{})
+	}
+	if entry.value.typ != listValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	list := entry.value.list
+	start, end, ok = normalizeListRange(start, end, len(list))
+	if !ok {
+		return encodeArray([]string{})
+	}
+
+	return encodeArray(list[start : end+1])
+}
+
+func normalizeListRange(start int, end int, length int) (int, int, bool) {
+	if length == 0 {
+		return 0, 0, false
+	}
+
+	if start < 0 {
+		start += length
+	}
+	if end < 0 {
+		end += length
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if end >= length {
+		end = length - 1
+	}
+	if start >= length || start > end {
+		return 0, 0, false
+	}
+
+	return start, end, true
 }
 
 func (s *server) getLiveEntry(key string) (storeEntry, bool) {

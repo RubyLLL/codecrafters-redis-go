@@ -145,3 +145,15 @@ func encodeSimpleError(s string) []byte {
 func encodeInteger(value int) []byte {
 	return []byte(":" + strconv.Itoa(value) + "\r\n")
 }
+
+func encodeArray(list []string) []byte {
+	if len(list) == 0 {
+		return []byte("*0\r\n")
+	}
+
+	result := []byte("*" + strconv.Itoa(len(list)) + "\r\n")
+	for _, ele := range list {
+		result = append(result, encodeBulkString(ele)...)
+	}
+	return result
+}
