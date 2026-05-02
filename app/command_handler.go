@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -15,8 +17,14 @@ const (
 )
 
 type server struct {
-	store map[string]string
+	store map[string]storeEntry
 	mu    sync.RWMutex
+	now   func() time.Time
+}
+
+type storeEntry struct {
+	value     string
+	expiresAt time.Time
 }
 
 type commandHandler func(*server, []string) []byte
@@ -30,7 +38,8 @@ var commandHandlers = map[string]commandHandler{
 
 func newServer() *server {
 	return &server{
-		store: make(map[string]string),
+		store: make(map[string]storeEntry),
+		now:   time.Now,
 	}
 }
 
@@ -94,24 +103,62 @@ func (s *server) handleGet(args []string) []byte {
 	}
 
 	s.mu.RLock()
-	value, ok := s.store[args[0]]
+	entry, ok := s.store[args[0]]
 	s.mu.RUnlock()
 
 	if !ok {
 		return encodeNullBulkString()
 	}
+	if entry.isExpired(s.now()) {
+		s.mu.Lock()
+		if current, ok := s.store[args[0]]; ok && current.isExpired(s.now()) {
+			delete(s.store, args[0])
+		}
+		s.mu.Unlock()
 
-	return encodeBulkString(value)
+		return encodeNullBulkString()
+	}
+
+	return encodeBulkString(entry.value)
 }
 
 func (s *server) handleSet(args []string) []byte {
-	if len(args) != 2 {
+	if len(args) != 2 && len(args) != 4 {
 		return encodeSimpleError("ERR wrong number of arguments for 'set' command")
 	}
 
+	entry := storeEntry{value: args[1]}
+	if len(args) == 4 {
+		expiresAt, err := s.parseSetExpiry(args[2], args[3])
+		if err != nil {
+			return encodeSimpleError(err.Error())
+		}
+		entry.expiresAt = expiresAt
+	}
+
 	s.mu.Lock()
-	s.store[args[0]] = args[1]
+	s.store[args[0]] = entry
 	s.mu.Unlock()
 
 	return encodeSimpleString(OK)
+}
+
+func (s *server) parseSetExpiry(option string, rawValue string) (time.Time, error) {
+	value, err := strconv.Atoi(rawValue)
+	if err != nil || value <= 0 {
+		return time.Time{}, fmt.Errorf("ERR invalid expire time in 'set' command")
+	}
+
+	switch strings.ToUpper(option) {
+	case "EX":
+		return s.now().Add(time.Duration(value) * time.Second), nil
+	case "PX":
+		return s.now().Add(time.Duration(value) * time.Millisecond), nil
+	default:
+		return time.Time{}, fmt.Errorf("ERR syntax error")
+	}
+}
+
+func (e storeEntry) isExpired(now time.Time) bool {
+	return !e.expiresAt.IsZero() && !now.Before(e.expiresAt)
 }
