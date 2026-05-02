@@ -89,3 +89,55 @@ func TestServerRejectsInvalidSetExpiry(t *testing.T) {
 		}
 	}
 }
+
+func TestServerHandlesRpush(t *testing.T) {
+	server := newServer()
+
+	if got := string(server.handleCommand([]string{"RPUSH", "items", "a", "b"})); got != ":2\r\n" {
+		t.Fatalf("first RPUSH response = %q, want length 2", got)
+	}
+	if got := string(server.handleCommand([]string{"RPUSH", "items", "c"})); got != ":3\r\n" {
+		t.Fatalf("second RPUSH response = %q, want length 3", got)
+	}
+
+	entry, ok := server.getLiveEntry("items")
+	if !ok {
+		t.Fatal("items key missing after RPUSH")
+	}
+	want := []string{"a", "b", "c"}
+	for i := range want {
+		if entry.value.list[i] != want[i] {
+			t.Fatalf("list[%d] = %q, want %q", i, entry.value.list[i], want[i])
+		}
+	}
+}
+
+func TestServerRejectsRpushOnStringKey(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"SET", "name", "redis"})
+
+	if got := string(server.handleCommand([]string{"RPUSH", "name", "value"})); got != "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n" {
+		t.Fatalf("RPUSH string key response = %q", got)
+	}
+}
+
+func TestServerRpushReplacesExpiredStringKey(t *testing.T) {
+	server := newServer()
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	server.now = func() time.Time { return now }
+
+	server.handleCommand([]string{"SET", "items", "old", "PX", "500"})
+	now = now.Add(500 * time.Millisecond)
+
+	if got := string(server.handleCommand([]string{"RPUSH", "items", "new"})); got != ":1\r\n" {
+		t.Fatalf("RPUSH expired string response = %q, want length 1", got)
+	}
+
+	entry, ok := server.getLiveEntry("items")
+	if !ok {
+		t.Fatal("items key missing after RPUSH")
+	}
+	if entry.value.typ != listValue || len(entry.value.list) != 1 || entry.value.list[0] != "new" {
+		t.Fatalf("entry after RPUSH expired key = %+v", entry)
+	}
+}

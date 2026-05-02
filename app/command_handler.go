@@ -16,6 +16,19 @@ const (
 	OK string = "OK"
 )
 
+type valueType int
+
+const (
+	stringValue valueType = iota
+	listValue
+)
+
+type redisValue struct {
+	typ  valueType
+	str  string
+	list []string
+}
+
 type server struct {
 	store map[string]storeEntry
 	mu    sync.RWMutex
@@ -23,17 +36,18 @@ type server struct {
 }
 
 type storeEntry struct {
-	value     string
+	value     redisValue
 	expiresAt time.Time
 }
 
 type commandHandler func(*server, []string) []byte
 
 var commandHandlers = map[string]commandHandler{
-	"PING": (*server).handlePing,
-	"ECHO": (*server).handleEcho,
-	"GET":  (*server).handleGet,
-	"SET":  (*server).handleSet,
+	"PING":  (*server).handlePing,
+	"ECHO":  (*server).handleEcho,
+	"GET":   (*server).handleGet,
+	"SET":   (*server).handleSet,
+	"RPUSH": (*server).handleRpush,
 }
 
 func newServer() *server {
@@ -102,24 +116,17 @@ func (s *server) handleGet(args []string) []byte {
 		return encodeSimpleError("ERR wrong number of arguments for 'get' command")
 	}
 
-	s.mu.RLock()
-	entry, ok := s.store[args[0]]
-	s.mu.RUnlock()
+	entry, ok := s.getLiveEntry(args[0])
 
 	if !ok {
 		return encodeNullBulkString()
 	}
-	if entry.isExpired(s.now()) {
-		s.mu.Lock()
-		if current, ok := s.store[args[0]]; ok && current.isExpired(s.now()) {
-			delete(s.store, args[0])
-		}
-		s.mu.Unlock()
 
-		return encodeNullBulkString()
+	if entry.value.typ != stringValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 
-	return encodeBulkString(entry.value)
+	return encodeBulkString(entry.value.str)
 }
 
 func (s *server) handleSet(args []string) []byte {
@@ -127,7 +134,11 @@ func (s *server) handleSet(args []string) []byte {
 		return encodeSimpleError("ERR wrong number of arguments for 'set' command")
 	}
 
-	entry := storeEntry{value: args[1]}
+	v := redisValue{
+		typ: stringValue,
+		str: args[1],
+	}
+	entry := storeEntry{value: v}
 	if len(args) == 4 {
 		expiresAt, err := s.parseSetExpiry(args[2], args[3])
 		if err != nil {
@@ -141,6 +152,61 @@ func (s *server) handleSet(args []string) []byte {
 	s.mu.Unlock()
 
 	return encodeSimpleString(OK)
+}
+
+func (s *server) handleRpush(args []string) []byte {
+	if len(args) < 2 {
+		return encodeSimpleError("ERR wrong number of arguments for 'rpush' command")
+	}
+
+	key := args[0]
+	newValues := args[1:]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.store[key]
+	if ok && entry.isExpired(s.now()) {
+		entry = storeEntry{}
+		ok = false
+		delete(s.store, key)
+	}
+	if ok && entry.value.typ != listValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	list := entry.value.list
+	list = append(list, newValues...)
+	entry.value = redisValue{typ: listValue, list: list}
+	s.store[key] = entry
+
+	return encodeInteger(len(list))
+}
+
+func (s *server) getLiveEntry(key string) (storeEntry, bool) {
+	s.mu.RLock()
+	entry, ok := s.store[key]
+	if !ok || !entry.isExpired(s.now()) {
+		s.mu.RUnlock()
+		return entry, ok
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Re-read after taking the write lock: another goroutine may have replaced
+	// this key while we were switching from the read lock to the write lock.
+	entry, ok = s.store[key]
+	if !ok {
+		return storeEntry{}, false
+	}
+	if entry.isExpired(s.now()) {
+		delete(s.store, key)
+		return storeEntry{}, false
+	}
+
+	return entry, true
 }
 
 func (s *server) parseSetExpiry(option string, rawValue string) (time.Time, error) {
