@@ -49,6 +49,7 @@ var commandHandlers = map[string]commandHandler{
 	"SET":    (*server).handleSet,
 	"RPUSH":  (*server).handleRpush,
 	"LRANGE": (*server).handleLrange,
+	"LPUSH":  (*server).handleLpush,
 }
 
 func newServer() *server {
@@ -215,6 +216,40 @@ func (s *server) handleLrange(args []string) []byte {
 	}
 
 	return encodeArray(list[start : end+1])
+}
+
+func (s *server) handleLpush(args []string) []byte {
+	if len(args) < 2 {
+		return encodeSimpleError("ERR wrong number of arguments for 'rpush' command")
+	}
+
+	key := args[0]
+	newValues := args[1:]
+
+	// reverse array
+	for i, j := 0, len(newValues)-1; i < j; i, j = i+1, j-1 {
+		newValues[i], newValues[j] = newValues[j], newValues[i]
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.store[key]
+	if ok && entry.isExpired(s.now()) {
+		entry = storeEntry{}
+		ok = false
+		delete(s.store, key)
+	}
+	if ok && entry.value.typ != listValue {
+		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+
+	list := entry.value.list
+	list = append(newValues, list...)
+	entry.value = redisValue{typ: listValue, list: list}
+	s.store[key] = entry
+
+	return encodeInteger(len(list))
 }
 
 func normalizeListRange(start int, end int, length int) (int, int, bool) {
