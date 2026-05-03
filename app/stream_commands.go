@@ -14,11 +14,6 @@ func (s *server) handleXadd(args []string) []byte {
 	key := args[0]
 	rawID := args[1]
 
-	id, errMsg := parseStreamID(rawID)
-	if errMsg != "" {
-		return encodeSimpleError(errMsg)
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -33,10 +28,13 @@ func (s *server) handleXadd(args []string) []byte {
 	}
 
 	entries := entry.value.stream.entries
-	if len(entries) > 0 {
-		if !isStreamIDAfter(id, entries[len(entries)-1].id) {
-			return encodeSimpleError(errStreamID)
-		}
+	lastID, hasLastID := lastStreamID(entries)
+	id, errMsg := parseStreamID(rawID, lastID, hasLastID)
+	if errMsg != "" {
+		return encodeSimpleError(errMsg)
+	}
+	if hasLastID && !isStreamIDAfter(id, lastID) {
+		return encodeSimpleError(errStreamID)
 	}
 
 	fields := make([]streamField, 0, (len(args)-2)/2)
@@ -56,8 +54,8 @@ func (s *server) handleXadd(args []string) []byte {
 	return encodeBulkString(formatStreamID(id))
 }
 
-func parseStreamID(id string) (streamID, string) {
-	if strings.EqualFold(id, "0-0") {
+func parseStreamID(id string, lastID streamID, hasLastID bool) (streamID, string) {
+	if id == "0-0" {
 		return streamID{}, errStreamZeroID
 	}
 
@@ -70,12 +68,36 @@ func parseStreamID(id string) (streamID, string) {
 	if err != nil || ms < 0 {
 		return streamID{}, errStreamIDType
 	}
+
+	if parts[1] == "*" {
+		return streamID{ms: ms, seq: nextStreamSequence(ms, lastID, hasLastID)}, ""
+	}
+
 	seq, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || seq < 0 {
 		return streamID{}, errStreamIDType
 	}
 
 	return streamID{ms: ms, seq: seq}, ""
+}
+
+func lastStreamID(entries []streamEntry) (streamID, bool) {
+	if len(entries) == 0 {
+		return streamID{}, false
+	}
+
+	return entries[len(entries)-1].id, true
+}
+
+func nextStreamSequence(ms int64, lastID streamID, hasLastID bool) int64 {
+	if ms == 0 {
+		return 1
+	}
+	if hasLastID && ms == lastID.ms {
+		return lastID.seq + 1
+	}
+
+	return 0
 }
 
 func isStreamIDAfter(id streamID, lastID streamID) bool {
