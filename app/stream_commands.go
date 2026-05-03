@@ -58,7 +58,7 @@ func (s *server) handleXadd(args []string) []byte {
 
 func parseStreamID(id string) (streamID, string) {
 	if strings.EqualFold(id, "0-0") {
-		return streamID{}, errStreamID
+		return streamID{}, errStreamZeroID
 	}
 
 	parts := strings.Split(id, "-")

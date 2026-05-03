@@ -15,6 +15,7 @@ const (
 	errSyntax             = "ERR syntax error"
 	errStreamID           = "ERR The ID specified in XADD is equal or smaller than the target stream top item"
 	errStreamIDType       = "ERR Invalid stream ID specified as stream command argument"
+	errStreamZeroID       = "ERR The ID specified in XADD must be greater than 0-0"
 )
 
 func encodeWrongNumberOfArguments(command string) []byte {
