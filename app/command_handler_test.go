@@ -261,3 +261,71 @@ func TestServerRejectsInvalidLpop(t *testing.T) {
 		t.Fatalf("LPOP string key response = %q", got)
 	}
 }
+
+func TestServerHandlesBlpopExistingList(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "items", "a", "b"})
+
+	if got := string(server.handleCommand([]string{"BLPOP", "items", "0"})); got != "*2\r\n$5\r\nitems\r\n$1\r\na\r\n" {
+		t.Fatalf("BLPOP response = %q, want key and first item", got)
+	}
+	if got := string(server.handleCommand([]string{"LRANGE", "items", "0", "-1"})); got != "*1\r\n$1\r\nb\r\n" {
+		t.Fatalf("remaining list = %q, want only b", got)
+	}
+}
+
+func TestServerBlpopWaitsUntilListReceivesItem(t *testing.T) {
+	server := newServer()
+	done := make(chan string, 1)
+
+	go func() {
+		done <- string(server.handleCommand([]string{"BLPOP", "items", "0"}))
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("BLPOP returned before item was pushed: %q", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	server.handleCommand([]string{"RPUSH", "items", "a"})
+
+	select {
+	case got := <-done:
+		if got != "*2\r\n$5\r\nitems\r\n$1\r\na\r\n" {
+			t.Fatalf("BLPOP response = %q, want key and pushed item", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BLPOP did not return after item was pushed")
+	}
+}
+
+func TestServerBlpopChecksKeysInOrder(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"RPUSH", "second", "b"})
+	server.handleCommand([]string{"RPUSH", "first", "a"})
+
+	if got := string(server.handleCommand([]string{"BLPOP", "first", "second", "0"})); got != "*2\r\n$5\r\nfirst\r\n$1\r\na\r\n" {
+		t.Fatalf("BLPOP ordered response = %q, want first key", got)
+	}
+}
+
+func TestServerRejectsInvalidBlpop(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"SET", "name", "redis"})
+
+	tests := [][]string{
+		{"BLPOP"},
+		{"BLPOP", "items", "-1"},
+		{"BLPOP", "items", "abc"},
+	}
+
+	for _, command := range tests {
+		if got := string(server.handleCommand(command)); got == "*-1\r\n" || got == "+OK\r\n" {
+			t.Fatalf("command %v succeeded unexpectedly with response %q", command, got)
+		}
+	}
+	if got := string(server.handleCommand([]string{"BLPOP", "name", "0"})); got != "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n" {
+		t.Fatalf("BLPOP string key response = %q", got)
+	}
+}

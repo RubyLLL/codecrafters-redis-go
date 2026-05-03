@@ -14,6 +14,15 @@ import (
 
 const (
 	OK string = "OK"
+
+	errEmptyCommand       = "ERR empty command"
+	errUnknownCommand     = "ERR unknown command"
+	errWrongType          = "WRONGTYPE Operation against a key holding the wrong kind of value"
+	errIntegerOutOfRange  = "ERR value is not an integer or out of range"
+	errPositiveOutOfRange = "ERR value is out of range, must be positive"
+	errInvalidExpireTime  = "ERR invalid expire time in 'set' command"
+	errInvalidTimeout     = "ERR timeout is not a float or out of range"
+	errSyntax             = "ERR syntax error"
 )
 
 type valueType int
@@ -32,6 +41,7 @@ type redisValue struct {
 type server struct {
 	store map[string]storeEntry
 	mu    sync.RWMutex
+	cond  *sync.Cond
 	now   func() time.Time
 }
 
@@ -52,13 +62,16 @@ var commandHandlers = map[string]commandHandler{
 	"LPUSH":  (*server).handleLpush,
 	"LLEN":   (*server).handleLlen,
 	"LPOP":   (*server).handleLpop,
+	"BLPOP":  (*server).handleBlpop,
 }
 
 func newServer() *server {
-	return &server{
+	s := &server{
 		store: make(map[string]storeEntry),
 		now:   time.Now,
 	}
+	s.cond = sync.NewCond(&s.mu)
+	return s
 }
 
 func (s *server) handleConnection(conn net.Conn) {
@@ -84,13 +97,13 @@ func (s *server) handleConnection(conn net.Conn) {
 
 func (s *server) handleCommand(command []string) []byte {
 	if len(command) == 0 {
-		return encodeSimpleError("ERR empty command")
+		return encodeSimpleError(errEmptyCommand)
 	}
 
 	name := strings.ToUpper(command[0])
 	handler, ok := commandHandlers[name]
 	if !ok {
-		return encodeSimpleError("ERR unknown command")
+		return encodeSimpleError(errUnknownCommand)
 	}
 
 	return handler(s, command[1:])
@@ -98,7 +111,7 @@ func (s *server) handleCommand(command []string) []byte {
 
 func (s *server) handlePing(args []string) []byte {
 	if len(args) > 1 {
-		return encodeSimpleError("ERR wrong number of arguments for 'ping' command")
+		return encodeWrongNumberOfArguments("ping")
 	}
 	if len(args) == 1 {
 		return encodeBulkString(args[0])
@@ -109,7 +122,7 @@ func (s *server) handlePing(args []string) []byte {
 
 func (s *server) handleEcho(args []string) []byte {
 	if len(args) != 1 {
-		return encodeSimpleError("ERR wrong number of arguments for 'echo' command")
+		return encodeWrongNumberOfArguments("echo")
 	}
 
 	return encodeBulkString(args[0])
@@ -117,7 +130,7 @@ func (s *server) handleEcho(args []string) []byte {
 
 func (s *server) handleGet(args []string) []byte {
 	if len(args) != 1 {
-		return encodeSimpleError("ERR wrong number of arguments for 'get' command")
+		return encodeWrongNumberOfArguments("get")
 	}
 
 	entry, ok := s.getLiveEntry(args[0])
@@ -127,7 +140,7 @@ func (s *server) handleGet(args []string) []byte {
 	}
 
 	if entry.value.typ != stringValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	return encodeBulkString(entry.value.str)
@@ -135,7 +148,7 @@ func (s *server) handleGet(args []string) []byte {
 
 func (s *server) handleSet(args []string) []byte {
 	if len(args) != 2 && len(args) != 4 {
-		return encodeSimpleError("ERR wrong number of arguments for 'set' command")
+		return encodeWrongNumberOfArguments("set")
 	}
 
 	v := redisValue{
@@ -160,7 +173,7 @@ func (s *server) handleSet(args []string) []byte {
 
 func (s *server) handleRpush(args []string) []byte {
 	if len(args) < 2 {
-		return encodeSimpleError("ERR wrong number of arguments for 'rpush' command")
+		return encodeWrongNumberOfArguments("rpush")
 	}
 
 	key := args[0]
@@ -176,30 +189,31 @@ func (s *server) handleRpush(args []string) []byte {
 		delete(s.store, key)
 	}
 	if ok && entry.value.typ != listValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	list := entry.value.list
 	list = append(list, newValues...)
 	entry.value = redisValue{typ: listValue, list: list}
 	s.store[key] = entry
+	s.cond.Broadcast()
 
 	return encodeInteger(len(list))
 }
 
 func (s *server) handleLrange(args []string) []byte {
 	if len(args) != 3 {
-		return encodeSimpleError("ERR wrong number of arguments for 'lrange' command")
+		return encodeWrongNumberOfArguments("lrange")
 	}
 
 	key := args[0]
 	start, err := strconv.Atoi(args[1])
 	if err != nil {
-		return encodeSimpleError("ERR value is not an integer or out of range")
+		return encodeSimpleError(errIntegerOutOfRange)
 	}
 	end, err := strconv.Atoi(args[2])
 	if err != nil {
-		return encodeSimpleError("ERR value is not an integer or out of range")
+		return encodeSimpleError(errIntegerOutOfRange)
 	}
 
 	entry, ok := s.getLiveEntry(key)
@@ -208,7 +222,7 @@ func (s *server) handleLrange(args []string) []byte {
 		return encodeArray([]string{})
 	}
 	if entry.value.typ != listValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	list := entry.value.list
@@ -222,7 +236,7 @@ func (s *server) handleLrange(args []string) []byte {
 
 func (s *server) handleLpush(args []string) []byte {
 	if len(args) < 2 {
-		return encodeSimpleError("ERR wrong number of arguments for 'rpush' command")
+		return encodeWrongNumberOfArguments("lpush")
 	}
 
 	key := args[0]
@@ -243,20 +257,21 @@ func (s *server) handleLpush(args []string) []byte {
 		delete(s.store, key)
 	}
 	if ok && entry.value.typ != listValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	list := entry.value.list
 	list = append(newValues, list...)
 	entry.value = redisValue{typ: listValue, list: list}
 	s.store[key] = entry
+	s.cond.Broadcast()
 
 	return encodeInteger(len(list))
 }
 
 func (s *server) handleLlen(args []string) []byte {
 	if len(args) != 1 {
-		return encodeSimpleError("ERR wrong number of arguments for 'llen' command")
+		return encodeWrongNumberOfArguments("llen")
 	}
 
 	entry, ok := s.getLiveEntry(args[0])
@@ -266,7 +281,7 @@ func (s *server) handleLlen(args []string) []byte {
 	}
 
 	if entry.value.typ != listValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	return encodeInteger(len(entry.value.list))
@@ -274,7 +289,7 @@ func (s *server) handleLlen(args []string) []byte {
 
 func (s *server) handleLpop(args []string) []byte {
 	if len(args) < 1 || len(args) > 2 {
-		return encodeSimpleError("ERR wrong number of arguments for 'lpop' command")
+		return encodeWrongNumberOfArguments("lpop")
 	}
 
 	key := args[0]
@@ -284,7 +299,7 @@ func (s *server) handleLpop(args []string) []byte {
 		var err error
 		deleteCount, err = strconv.Atoi(args[1])
 		if err != nil || deleteCount < 0 {
-			return encodeSimpleError("ERR value is out of range, must be positive")
+			return encodeSimpleError(errPositiveOutOfRange)
 		}
 	}
 
@@ -308,7 +323,7 @@ func (s *server) handleLpop(args []string) []byte {
 		return encodeNullBulkString()
 	}
 	if ok && entry.value.typ != listValue {
-		return encodeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		return encodeSimpleError(errWrongType)
 	}
 
 	list := entry.value.list
@@ -341,6 +356,65 @@ func (s *server) handleLpop(args []string) []byte {
 	}
 
 	return encodeArray(popped)
+}
+
+func (s *server) handleBlpop(args []string) []byte {
+	if len(args) < 2 {
+		return encodeWrongNumberOfArguments("blpop")
+	}
+
+	keys := args[:len(args)-1]
+	timeout, err := strconv.ParseFloat(args[len(args)-1], 64)
+	if err != nil || timeout < 0 {
+		return encodeSimpleError(errInvalidTimeout)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for {
+		for _, key := range keys {
+			value, found, wrongType := s.popListHeadLocked(key)
+			if wrongType {
+				return encodeSimpleError(errWrongType)
+			}
+			if found {
+				return encodeArray([]string{key, value})
+			}
+		}
+		s.cond.Wait()
+	}
+}
+
+func (s *server) popListHeadLocked(key string) (string, bool, bool) {
+	entry, ok := s.store[key]
+	if !ok {
+		return "", false, false
+	}
+	if entry.isExpired(s.now()) {
+		delete(s.store, key)
+		return "", false, false
+	}
+	if entry.value.typ != listValue {
+		return "", false, true
+	}
+
+	list := entry.value.list
+	if len(list) == 0 {
+		delete(s.store, key)
+		return "", false, false
+	}
+
+	value := list[0]
+	remaining := list[1:]
+	if len(remaining) == 0 {
+		delete(s.store, key)
+	} else {
+		entry.value = redisValue{typ: listValue, list: remaining}
+		s.store[key] = entry
+	}
+
+	return value, true, false
 }
 
 func normalizeListRange(start int, end int, length int) (int, int, bool) {
@@ -397,7 +471,7 @@ func (s *server) getLiveEntry(key string) (storeEntry, bool) {
 func (s *server) parseSetExpiry(option string, rawValue string) (time.Time, error) {
 	value, err := strconv.Atoi(rawValue)
 	if err != nil || value <= 0 {
-		return time.Time{}, fmt.Errorf("ERR invalid expire time in 'set' command")
+		return time.Time{}, errors.New(errInvalidExpireTime)
 	}
 
 	switch strings.ToUpper(option) {
@@ -406,10 +480,14 @@ func (s *server) parseSetExpiry(option string, rawValue string) (time.Time, erro
 	case "PX":
 		return s.now().Add(time.Duration(value) * time.Millisecond), nil
 	default:
-		return time.Time{}, fmt.Errorf("ERR syntax error")
+		return time.Time{}, errors.New(errSyntax)
 	}
 }
 
 func (e storeEntry) isExpired(now time.Time) bool {
 	return !e.expiresAt.IsZero() && !now.Before(e.expiresAt)
+}
+
+func encodeWrongNumberOfArguments(command string) []byte {
+	return encodeSimpleError(fmt.Sprintf("ERR wrong number of arguments for '%s' command", command))
 }
