@@ -17,6 +17,7 @@ var commandHandlers = map[string]commandHandler{
 	"BLPOP":  (*server).handleBlpop,
 	"TYPE":   (*server).handleType,
 	"XADD":   (*server).handleXadd,
+	"XRANGE": (*server).handleXrange,
 }
 
 func (s *server) handleCommand(command []string) []byte {

@@ -158,6 +158,14 @@ func encodeArray(list []string) []byte {
 	return result
 }
 
+func encodeRawArray(elements [][]byte) []byte {
+	result := []byte("*" + strconv.Itoa(len(elements)) + "\r\n")
+	for _, element := range elements {
+		result = append(result, element...)
+	}
+	return result
+}
+
 func encodeNullArray() []byte {
 	return []byte("*-1\r\n")
 }

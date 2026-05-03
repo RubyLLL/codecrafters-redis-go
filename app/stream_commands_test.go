@@ -87,3 +87,74 @@ func TestServerRejectsXaddWrongType(t *testing.T) {
 		t.Fatalf("XADD wrong type response = %q", got)
 	}
 }
+
+func TestServerHandlesXrangeFullRange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "mystream", "1-0", "temperature", "36", "humidity", "95"})
+	server.handleCommand([]string{"XADD", "mystream", "2-0", "temperature", "37"})
+
+	want := "*2\r\n" +
+		"*2\r\n$3\r\n1-0\r\n*4\r\n$11\r\ntemperature\r\n$2\r\n36\r\n$8\r\nhumidity\r\n$2\r\n95\r\n" +
+		"*2\r\n$3\r\n2-0\r\n*2\r\n$11\r\ntemperature\r\n$2\r\n37\r\n"
+	if got := string(server.handleCommand([]string{"XRANGE", "mystream", "-", "+"})); got != want {
+		t.Fatalf("XRANGE full response = %q, want %q", got, want)
+	}
+}
+
+func TestServerHandlesXrangeSubRange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "mystream", "1-0", "field", "a"})
+	server.handleCommand([]string{"XADD", "mystream", "1-1", "field", "b"})
+	server.handleCommand([]string{"XADD", "mystream", "2-0", "field", "c"})
+
+	want := "*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$5\r\nfield\r\n$1\r\nb\r\n"
+	if got := string(server.handleCommand([]string{"XRANGE", "mystream", "1-1", "1-1"})); got != want {
+		t.Fatalf("XRANGE exact response = %q, want %q", got, want)
+	}
+
+	want = "*2\r\n" +
+		"*2\r\n$3\r\n1-0\r\n*2\r\n$5\r\nfield\r\n$1\r\na\r\n" +
+		"*2\r\n$3\r\n1-1\r\n*2\r\n$5\r\nfield\r\n$1\r\nb\r\n"
+	if got := string(server.handleCommand([]string{"XRANGE", "mystream", "1", "1"})); got != want {
+		t.Fatalf("XRANGE millisecond response = %q, want %q", got, want)
+	}
+}
+
+func TestServerHandlesEmptyXrange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "mystream", "1-0", "field", "value"})
+
+	tests := [][]string{
+		{"XRANGE", "missing", "-", "+"},
+		{"XRANGE", "mystream", "2-0", "3-0"},
+		{"XRANGE", "mystream", "1-1", "1-2"},
+	}
+
+	for _, command := range tests {
+		if got := string(server.handleCommand(command)); got != "*0\r\n" {
+			t.Fatalf("command %v response = %q, want empty array", command, got)
+		}
+	}
+}
+
+func TestServerRejectsInvalidXrange(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"SET", "mystream", "value"})
+
+	if got := string(server.handleCommand([]string{"XRANGE", "mystream", "-", "+"})); got != "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n" {
+		t.Fatalf("XRANGE wrong type response = %q", got)
+	}
+
+	tests := [][]string{
+		{"XRANGE", "mystream", "abc", "+"},
+		{"XRANGE", "mystream", "1-a", "+"},
+		{"XRANGE", "mystream", "1--1", "+"},
+		{"XRANGE", "mystream", "-", "*"},
+	}
+
+	for _, command := range tests {
+		if got := string(server.handleCommand(command)); got != "-ERR Invalid stream ID specified as stream command argument\r\n" {
+			t.Fatalf("command %v response = %q, want invalid stream ID error", command, got)
+		}
+	}
+}

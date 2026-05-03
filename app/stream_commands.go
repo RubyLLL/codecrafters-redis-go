@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const maxStreamSeq = int64(^uint64(0) >> 1)
+
 func (s *server) handleXadd(args []string) []byte {
 	if len(args) < 4 || len(args)%2 != 0 {
 		return encodeWrongNumberOfArguments("xadd")
@@ -53,6 +55,91 @@ func (s *server) handleXadd(args []string) []byte {
 	s.store[key] = entry
 
 	return encodeBulkString(formatStreamID(id))
+}
+
+func (s *server) handleXrange(args []string) []byte {
+	if len(args) != 3 {
+		return encodeWrongNumberOfArguments("xrange")
+	}
+
+	key := args[0]
+	start, ok := parseStreamIDForXrange(args[1], false)
+	if !ok {
+		return encodeSimpleError(errStreamIDType)
+	}
+	end, ok := parseStreamIDForXrange(args[2], true)
+	if !ok {
+		return encodeSimpleError(errStreamIDType)
+	}
+
+	entry, ok := s.getLiveEntry(key)
+	if !ok {
+		return encodeRawArray(nil)
+	}
+	if entry.value.typ != streamValue {
+		return encodeSimpleError(errWrongType)
+	}
+
+	entries := entry.value.stream.entries
+	result := make([][]byte, 0, len(entries))
+	for _, entry := range entries {
+		if compareStreamID(entry.id, start) >= 0 && compareStreamID(entry.id, end) <= 0 {
+			result = append(result, buildXrangeEntry(entry))
+		}
+	}
+
+	return encodeRawArray(result)
+}
+
+func buildXrangeEntry(entry streamEntry) []byte {
+	return encodeRawArray([][]byte{
+		encodeBulkString(formatStreamID(entry.id)),
+		buildArrayFromEntry(entry),
+	})
+}
+
+func buildArrayFromEntry(entry streamEntry) []byte {
+	result := make([]string, 0, len(entry.fields)*2)
+	for _, field := range entry.fields {
+		result = append(result, field.key)
+		result = append(result, field.value)
+	}
+
+	return encodeArray(result)
+}
+
+func parseStreamIDForXrange(id string, isEnd bool) (streamID, bool) {
+	switch id {
+	case "-":
+		return streamID{}, true
+	case "+":
+		return streamID{ms: maxStreamSeq, seq: maxStreamSeq}, true
+	}
+
+	parts := strings.Split(id, "-")
+	if len(parts) > 2 || len(parts) == 0 {
+		return streamID{}, false
+	}
+
+	ms, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || ms < 0 {
+		return streamID{}, false
+	}
+
+	if len(parts) == 1 {
+		seq := int64(0)
+		if isEnd {
+			seq = maxStreamSeq
+		}
+		return streamID{ms: ms, seq: seq}, true
+	}
+
+	seq, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || seq < 0 {
+		return streamID{}, false
+	}
+
+	return streamID{ms: ms, seq: seq}, true
 }
 
 func parseStreamID(id string, lastID streamID, hasLastID bool) (streamID, string) {
@@ -114,6 +201,23 @@ func isStreamIDAfter(id streamID, lastID streamID) bool {
 	}
 
 	return false
+}
+
+func compareStreamID(a streamID, b streamID) int {
+	if a.ms < b.ms {
+		return -1
+	}
+	if a.ms > b.ms {
+		return 1
+	}
+	if a.seq < b.seq {
+		return -1
+	}
+	if a.seq > b.seq {
+		return 1
+	}
+
+	return 0
 }
 
 func formatStreamID(id streamID) string {
