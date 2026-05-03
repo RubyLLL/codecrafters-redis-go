@@ -63,6 +63,7 @@ var commandHandlers = map[string]commandHandler{
 	"LLEN":   (*server).handleLlen,
 	"LPOP":   (*server).handleLpop,
 	"BLPOP":  (*server).handleBlpop,
+	"TYPE":   (*server).handleType,
 }
 
 func newServer() *server {
@@ -126,6 +127,27 @@ func (s *server) handleEcho(args []string) []byte {
 	}
 
 	return encodeBulkString(args[0])
+}
+
+func (s *server) handleType(args []string) []byte {
+	if len(args) != 1 {
+		return encodeWrongNumberOfArguments("type")
+	}
+
+	entry, ok := s.getLiveEntry(args[0])
+
+	if !ok {
+		return encodeSimpleString("none")
+	}
+
+	switch entry.value.typ {
+	case stringValue:
+		return encodeSimpleString("string")
+	case listValue:
+		return encodeSimpleString("list")
+	default:
+		return encodeSimpleString("none")
+	}
 }
 
 func (s *server) handleGet(args []string) []byte {
