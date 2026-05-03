@@ -369,6 +369,19 @@ func (s *server) handleBlpop(args []string) []byte {
 		return encodeSimpleError(errInvalidTimeout)
 	}
 
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = s.now().Add(time.Duration(timeout * float64(time.Second)))
+
+		timer := time.AfterFunc(time.Until(deadline), func() {
+			s.mu.Lock()
+			s.cond.Broadcast()
+			s.mu.Unlock()
+		})
+
+		defer timer.Stop()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -382,6 +395,11 @@ func (s *server) handleBlpop(args []string) []byte {
 				return encodeArray([]string{key, value})
 			}
 		}
+
+		if !deadline.IsZero() && s.now().After(deadline) {
+			return encodeNullArray()
+		}
+
 		s.cond.Wait()
 	}
 }
