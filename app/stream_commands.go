@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (s *server) handleXadd(args []string) []byte {
@@ -57,6 +58,10 @@ func (s *server) handleXadd(args []string) []byte {
 func parseStreamID(id string, lastID streamID, hasLastID bool) (streamID, string) {
 	if id == "0-0" {
 		return streamID{}, errStreamZeroID
+	}
+	if strings.EqualFold(id, "*") {
+		ms := time.Now().UnixMilli()
+		return streamID{ms: ms, seq: nextStreamSequence(ms, lastID, hasLastID)}, ""
 	}
 
 	parts := strings.Split(id, "-")
