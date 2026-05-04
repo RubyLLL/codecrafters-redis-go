@@ -55,11 +55,14 @@ func (s *server) handleGet(args []string) []byte {
 		return encodeNullBulkString()
 	}
 
-	if entry.value.typ != stringValue {
+	switch entry.value.typ {
+	case stringValue:
+		return encodeBulkString(entry.value.str)
+	case intValue:
+		return encodeBulkString(strconv.Itoa(entry.value.number))
+	default:
 		return encodeSimpleError(errWrongType)
 	}
-
-	return encodeBulkString(entry.value.str)
 }
 
 func (s *server) handleSet(args []string) []byte {
