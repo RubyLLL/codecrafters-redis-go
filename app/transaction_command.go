@@ -35,3 +35,17 @@ func (c *clientSession) handleExec(args []string) []byte {
 
 	return encodeRawArray(result)
 }
+
+func (c *clientSession) handleDiscard(args []string) []byte {
+	if len(args) > 0 {
+		return encodeWrongNumberOfArguments("discard")
+	}
+	if !c.transactional {
+		return encodeSimpleError(errDiscardWithoutMulti)
+	}
+
+	c.transactional = false
+	c.queue = nil
+
+	return encodeSimpleString(OK)
+}

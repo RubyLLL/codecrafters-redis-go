@@ -22,6 +22,7 @@ const (
 	errExecWithoutMulti     = "ERR EXEC without MULTI"
 	errExecAbort            = "EXECABORT Transaction discarded because of:"
 	errNestedMulti          = "ERR MULTI calls can not be nested"
+	errDiscardWithoutMulti  = "ERR DISCARD without MULTI"
 )
 
 func encodeWrongNumberOfArguments(command string) []byte {

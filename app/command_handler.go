@@ -38,6 +38,8 @@ func (c *clientSession) handleCommand(command []string) []byte {
 		return c.handleMulti(command[1:])
 	case "EXEC":
 		return c.handleExec(command[1:])
+	case "DISCARD":
+		return c.handleDiscard(command[1:])
 	}
 
 	if c.transactional {
