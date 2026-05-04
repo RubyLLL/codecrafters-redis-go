@@ -91,11 +91,51 @@ func (s *server) handleXrange(args []string) []byte {
 	return encodeRawArray(result)
 }
 
+func (s *server) handleXread(args []string) []byte {
+	if len(args) != 3 || !strings.EqualFold(args[0], "STREAMS") {
+		return encodeWrongNumberOfArguments("xread")
+	}
+
+	key := args[1]
+	start, ok := parseStreamIDForXread(args[2])
+	if !ok {
+		return encodeSimpleError(errStreamIDType)
+	}
+
+	entry, ok := s.getLiveEntry(key)
+	if !ok {
+		return encodeNullArray()
+	}
+	if entry.value.typ != streamValue {
+		return encodeSimpleError(errWrongType)
+	}
+
+	entries := entriesAfterID(entry.value.stream.entries, start)
+	if len(entries) == 0 {
+		return encodeNullArray()
+	}
+
+	return encodeRawArray([][]byte{
+		encodeRawArray([][]byte{
+			encodeBulkString(key),
+			buildXreadEntries(entries),
+		}),
+	})
+}
+
 func buildXrangeEntry(entry streamEntry) []byte {
 	return encodeRawArray([][]byte{
 		encodeBulkString(formatStreamID(entry.id)),
 		buildArrayFromEntry(entry),
 	})
+}
+
+func buildXreadEntries(entries []streamEntry) []byte {
+	result := make([][]byte, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, buildXrangeEntry(entry))
+	}
+	return encodeRawArray(result)
 }
 
 func buildArrayFromEntry(entry streamEntry) []byte {
@@ -140,6 +180,19 @@ func parseStreamIDForXrange(id string, isEnd bool) (streamID, bool) {
 	}
 
 	return streamID{ms: ms, seq: seq}, true
+}
+
+func parseStreamIDForXread(id string) (streamID, bool) {
+	return parseStreamIDForXrange(id, false)
+}
+
+func entriesAfterID(entries []streamEntry, id streamID) []streamEntry {
+	for i, entry := range entries {
+		if compareStreamID(entry.id, id) > 0 {
+			return entries[i:]
+		}
+	}
+	return nil
 }
 
 func parseStreamID(id string, lastID streamID, hasLastID bool) (streamID, string) {
