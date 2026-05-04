@@ -17,8 +17,9 @@ func (s *server) handleIncr(args []string) []byte {
 	}
 
 	if entry.value.typ != intValue {
-
+		return encodeSimpleError(errIntegerOutOfRange)
 	}
+
 	current := entry.value.number
 	entry.value = redisValue{typ: intValue, number: current + 1}
 	s.store[key] = entry
