@@ -174,6 +174,33 @@ func TestServerHandlesXreadSingleStream(t *testing.T) {
 	}
 }
 
+func TestServerHandlesXreadMultipleStreams(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "stream1", "1-0", "field", "a"})
+	server.handleCommand([]string{"XADD", "stream1", "2-0", "field", "b"})
+	server.handleCommand([]string{"XADD", "stream2", "1-0", "other", "c"})
+
+	want := "*2\r\n" +
+		"*2\r\n$7\r\nstream1\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$5\r\nfield\r\n$1\r\nb\r\n" +
+		"*2\r\n$7\r\nstream2\r\n*1\r\n*2\r\n$3\r\n1-0\r\n*2\r\n$5\r\nother\r\n$1\r\nc\r\n"
+	if got := string(server.handleCommand([]string{"XREAD", "STREAMS", "stream1", "stream2", "1-0", "0-0"})); got != want {
+		t.Fatalf("XREAD multi stream response = %q, want %q", got, want)
+	}
+}
+
+func TestServerHandlesXreadSkippingStreamsWithoutNewEntries(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "stream1", "1-0", "field", "a"})
+	server.handleCommand([]string{"XADD", "stream2", "1-0", "field", "b"})
+	server.handleCommand([]string{"XADD", "stream2", "2-0", "field", "c"})
+
+	want := "*1\r\n" +
+		"*2\r\n$7\r\nstream2\r\n*1\r\n*2\r\n$3\r\n2-0\r\n*2\r\n$5\r\nfield\r\n$1\r\nc\r\n"
+	if got := string(server.handleCommand([]string{"XREAD", "STREAMS", "missing", "stream1", "stream2", "0-0", "1-0", "1-0"})); got != want {
+		t.Fatalf("XREAD skip empty streams response = %q, want %q", got, want)
+	}
+}
+
 func TestServerHandlesEmptyXread(t *testing.T) {
 	server := newServer()
 	server.handleCommand([]string{"XADD", "mystream", "1-0", "field", "value"})
@@ -181,6 +208,7 @@ func TestServerHandlesEmptyXread(t *testing.T) {
 	tests := [][]string{
 		{"XREAD", "STREAMS", "missing", "0-0"},
 		{"XREAD", "STREAMS", "mystream", "1-0"},
+		{"XREAD", "STREAMS", "missing", "mystream", "0-0", "1-0"},
 	}
 
 	for _, command := range tests {
@@ -202,7 +230,6 @@ func TestServerRejectsInvalidXread(t *testing.T) {
 		{"XREAD", "mystream", "0-0"},
 		{"XREAD", "STREAMS", "mystream"},
 		{"XREAD", "STREAMS", "mystream", "other", "0-0"},
-		{"XREAD", "STREAMS", "stream1", "stream2", "1-0", "0-0"},
 		{"XREAD", "STREAMS", "mystream", "abc"},
 		{"XREAD", "STREAMS", "mystream", "1-a"},
 	}

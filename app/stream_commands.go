@@ -91,36 +91,54 @@ func (s *server) handleXrange(args []string) []byte {
 	return encodeRawArray(result)
 }
 
+// STREAMS <key1> <key2> <id1> <id2>
 func (s *server) handleXread(args []string) []byte {
-	if len(args) != 3 || !strings.EqualFold(args[0], "STREAMS") {
+	if len(args) < 3 || !strings.EqualFold(args[0], "STREAMS") {
 		return encodeWrongNumberOfArguments("xread")
 	}
-
-	key := args[1]
-	start, ok := parseStreamIDForXread(args[2])
-	if !ok {
-		return encodeSimpleError(errStreamIDType)
+	if (len(args)-1)%2 != 0 {
+		return encodeSimpleError(errUnbalancedXread)
 	}
 
-	entry, ok := s.getLiveEntry(key)
-	if !ok {
-		return encodeNullArray()
-	}
-	if entry.value.typ != streamValue {
-		return encodeSimpleError(errWrongType)
+	pair := (len(args) - 1) / 2
+	keys := args[1 : 1+pair]
+	ids := args[1+pair:]
+
+	starts := make([]streamID, 0, len(ids))
+	for _, id := range ids {
+		start, ok := parseStreamIDForXread(id)
+		if !ok {
+			return encodeSimpleError(errStreamIDType)
+		}
+		starts = append(starts, start)
 	}
 
-	entries := entriesAfterID(entry.value.stream.entries, start)
-	if len(entries) == 0 {
-		return encodeNullArray()
-	}
+	result := make([][]byte, 0, len(keys))
+	for i, key := range keys {
+		entry, ok := s.getLiveEntry(key)
+		if !ok {
+			continue
+		}
+		if entry.value.typ != streamValue {
+			return encodeSimpleError(errWrongType)
+		}
 
-	return encodeRawArray([][]byte{
-		encodeRawArray([][]byte{
+		entries := entriesAfterID(entry.value.stream.entries, starts[i])
+		if len(entries) == 0 {
+			continue
+		}
+
+		result = append(result, encodeRawArray([][]byte{
 			encodeBulkString(key),
 			buildXreadEntries(entries),
-		}),
-	})
+		}))
+	}
+
+	if len(result) == 0 {
+		return encodeNullArray()
+	}
+
+	return encodeRawArray(result)
 }
 
 func buildXrangeEntry(entry streamEntry) []byte {
