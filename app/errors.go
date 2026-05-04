@@ -3,7 +3,8 @@ package main
 import "fmt"
 
 const (
-	OK string = "OK"
+	OK     = "OK"
+	QUEUED = "QUEUED"
 
 	errEmptyCommand         = "ERR empty command"
 	errUnknownCommand       = "ERR unknown command"

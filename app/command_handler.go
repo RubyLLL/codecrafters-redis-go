@@ -20,6 +20,7 @@ var commandHandlers = map[string]commandHandler{
 	"XRANGE": (*server).handleXrange,
 	"XREAD":  (*server).handleXread,
 	"INCR":   (*server).handleIncr,
+	"MULTI":  (*server).handleMulti,
 }
 
 func (s *server) handleCommand(command []string) []byte {
@@ -31,6 +32,10 @@ func (s *server) handleCommand(command []string) []byte {
 	handler, ok := commandHandlers[name]
 	if !ok {
 		return encodeSimpleError(errUnknownCommand)
+	}
+	if s.transactional {
+		s.queue = append(s.queue, command[1:])
+		return encodeSimpleString(QUEUED)
 	}
 
 	return handler(s, command[1:])

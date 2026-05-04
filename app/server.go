@@ -13,11 +13,13 @@ import (
 )
 
 type server struct {
-	store      map[string]storeEntry
-	mu         sync.RWMutex
-	streamCond *sync.Cond
-	listCond   *sync.Cond
-	now        func() time.Time
+	store         map[string]storeEntry
+	mu            sync.RWMutex
+	streamCond    *sync.Cond
+	listCond      *sync.Cond
+	now           func() time.Time
+	transactional bool
+	queue         [][]string
 }
 
 func newServer() *server {
