@@ -53,6 +53,7 @@ func (s *server) handleXadd(args []string) []byte {
 		},
 	}
 	s.store[key] = entry
+	s.streamCond.Broadcast()
 
 	return encodeBulkString(formatStreamID(id))
 }
@@ -91,36 +92,165 @@ func (s *server) handleXrange(args []string) []byte {
 	return encodeRawArray(result)
 }
 
-// STREAMS <key1> <key2> <id1> <id2>
 func (s *server) handleXread(args []string) []byte {
+	blocking := false
+	timeout := time.Duration(0)
+
+	if len(args) >= 1 && strings.EqualFold(args[0], "BLOCK") {
+		if len(args) < 5 {
+			return encodeWrongNumberOfArguments("xread")
+		}
+		ms, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil || ms < 0 {
+			return encodeSimpleError(errInvalidStreamTimeOut)
+		}
+		blocking = true
+		timeout = time.Duration(ms) * time.Millisecond
+		args = args[2:]
+	}
+
+	keys, ids, errResp := parseXreadStreams(args)
+	if errResp != nil {
+		return errResp
+	}
+
+	if blocking {
+		return s.handleBlockingXread(keys, ids, timeout)
+	}
+
+	return s.handleUnblockingXread(keys, ids)
+}
+
+func parseXreadStreams(args []string) ([]string, []string, []byte) {
 	if len(args) < 3 || !strings.EqualFold(args[0], "STREAMS") {
-		return encodeWrongNumberOfArguments("xread")
+		return nil, nil, encodeWrongNumberOfArguments("xread")
 	}
 	if (len(args)-1)%2 != 0 {
-		return encodeSimpleError(errUnbalancedXread)
+		return nil, nil, encodeSimpleError(errUnbalancedXread)
 	}
 
 	pair := (len(args) - 1) / 2
 	keys := args[1 : 1+pair]
 	ids := args[1+pair:]
 
+	return keys, ids, nil
+}
+
+func (s *server) handleBlockingXread(keys []string, ids []string, timeout time.Duration) []byte {
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = s.now().Add(timeout)
+
+		timer := time.AfterFunc(time.Until(deadline), func() {
+			s.mu.Lock()
+			s.streamCond.Broadcast()
+			s.mu.Unlock()
+		})
+
+		defer timer.Stop()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	starts, errResp := s.resolveXreadStartsLocked(keys, ids)
+	if errResp != nil {
+		return errResp
+	}
+
+	for {
+		result, errResp := s.collectXreadResultsLocked(keys, starts)
+		if errResp != nil {
+			return errResp
+		}
+		if len(result) > 0 {
+			return encodeRawArray(result)
+		}
+
+		if !deadline.IsZero() && !s.now().Before(deadline) {
+			return encodeNullArray()
+		}
+
+		s.streamCond.Wait()
+	}
+}
+
+func (s *server) handleUnblockingXread(keys []string, ids []string) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	starts, errResp := s.resolveXreadStartsLocked(keys, ids)
+	if errResp != nil {
+		return errResp
+	}
+
+	result, errResp := s.collectXreadResultsLocked(keys, starts)
+	if errResp != nil {
+		return errResp
+	}
+	if len(result) == 0 {
+		return encodeNullArray()
+	}
+
+	return encodeRawArray(result)
+}
+
+func (s *server) resolveXreadStartsLocked(keys []string, ids []string) ([]streamID, []byte) {
 	starts := make([]streamID, 0, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
+		if id == "$" {
+			lastID, errResp := s.lastStreamIDLocked(keys[i])
+			if errResp != nil {
+				return nil, errResp
+			}
+			starts = append(starts, lastID)
+			continue
+		}
+
 		start, ok := parseStreamIDForXread(id)
 		if !ok {
-			return encodeSimpleError(errStreamIDType)
+			return nil, encodeSimpleError(errStreamIDType)
 		}
 		starts = append(starts, start)
 	}
 
+	return starts, nil
+}
+
+func (s *server) lastStreamIDLocked(key string) (streamID, []byte) {
+	entry, ok := s.store[key]
+	if !ok {
+		return streamID{}, nil
+	}
+	if entry.isExpired(s.now()) {
+		delete(s.store, key)
+		return streamID{}, nil
+	}
+	if entry.value.typ != streamValue {
+		return streamID{}, encodeSimpleError(errWrongType)
+	}
+
+	lastID, ok := lastStreamID(entry.value.stream.entries)
+	if !ok {
+		return streamID{}, nil
+	}
+
+	return lastID, nil
+}
+
+func (s *server) collectXreadResultsLocked(keys []string, starts []streamID) ([][]byte, []byte) {
 	result := make([][]byte, 0, len(keys))
 	for i, key := range keys {
-		entry, ok := s.getLiveEntry(key)
+		entry, ok := s.store[key]
 		if !ok {
 			continue
 		}
+		if entry.isExpired(s.now()) {
+			delete(s.store, key)
+			continue
+		}
 		if entry.value.typ != streamValue {
-			return encodeSimpleError(errWrongType)
+			return nil, encodeSimpleError(errWrongType)
 		}
 
 		entries := entriesAfterID(entry.value.stream.entries, starts[i])
@@ -134,11 +264,7 @@ func (s *server) handleXread(args []string) []byte {
 		}))
 	}
 
-	if len(result) == 0 {
-		return encodeNullArray()
-	}
-
-	return encodeRawArray(result)
+	return result, nil
 }
 
 func buildXrangeEntry(entry streamEntry) []byte {

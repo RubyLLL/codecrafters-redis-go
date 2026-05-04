@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestServerHandlesXaddExplicitID(t *testing.T) {
 	server := newServer()
@@ -238,5 +241,75 @@ func TestServerRejectsInvalidXread(t *testing.T) {
 		if got := string(server.handleCommand(command)); got == "*-1\r\n" || got[0] != '-' {
 			t.Fatalf("command %v succeeded unexpectedly with response %q", command, got)
 		}
+	}
+}
+
+func TestServerHandlesBlockingXreadWithExistingEntry(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "mystream", "1-0", "field", "a"})
+	server.handleCommand([]string{"XADD", "mystream", "2-0", "field", "b"})
+
+	want := "*1\r\n" +
+		"*2\r\n$8\r\nmystream\r\n*1\r\n" +
+		"*2\r\n$3\r\n2-0\r\n*2\r\n$5\r\nfield\r\n$1\r\nb\r\n"
+	if got := string(server.handleCommand([]string{"XREAD", "BLOCK", "1000", "STREAMS", "mystream", "1-0"})); got != want {
+		t.Fatalf("blocking XREAD existing response = %q, want %q", got, want)
+	}
+}
+
+func TestServerHandlesBlockingXreadTimeout(t *testing.T) {
+	server := newServer()
+
+	if got := string(server.handleCommand([]string{"XREAD", "BLOCK", "1", "STREAMS", "mystream", "0-0"})); got != "*-1\r\n" {
+		t.Fatalf("blocking XREAD timeout response = %q, want null array", got)
+	}
+}
+
+func TestServerHandlesBlockingXreadDollar(t *testing.T) {
+	server := newServer()
+	server.handleCommand([]string{"XADD", "mystream", "1-0", "field", "old"})
+
+	result := make(chan string, 1)
+	go func() {
+		result <- string(server.handleCommand([]string{"XREAD", "BLOCK", "1000", "STREAMS", "mystream", "$"}))
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	server.handleCommand([]string{"XADD", "mystream", "2-0", "field", "new"})
+
+	want := "*1\r\n" +
+		"*2\r\n$8\r\nmystream\r\n*1\r\n" +
+		"*2\r\n$3\r\n2-0\r\n*2\r\n$5\r\nfield\r\n$3\r\nnew\r\n"
+	select {
+	case got := <-result:
+		if got != want {
+			t.Fatalf("blocking XREAD $ response = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocking XREAD $ did not wake after XADD")
+	}
+}
+
+func TestServerHandlesBlockingXreadMultipleStreams(t *testing.T) {
+	server := newServer()
+
+	result := make(chan string, 1)
+	go func() {
+		result <- string(server.handleCommand([]string{"XREAD", "BLOCK", "1000", "STREAMS", "stream1", "stream2", "0-0", "0-0"}))
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	server.handleCommand([]string{"XADD", "stream2", "1-0", "field", "value"})
+
+	want := "*1\r\n" +
+		"*2\r\n$7\r\nstream2\r\n*1\r\n" +
+		"*2\r\n$3\r\n1-0\r\n*2\r\n$5\r\nfield\r\n$5\r\nvalue\r\n"
+	select {
+	case got := <-result:
+		if got != want {
+			t.Fatalf("blocking XREAD multi stream response = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocking XREAD multi stream did not wake after XADD")
 	}
 }

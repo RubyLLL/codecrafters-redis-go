@@ -30,7 +30,7 @@ func (s *server) handleRpush(args []string) []byte {
 	list = append(list, newValues...)
 	entry.value = redisValue{typ: listValue, list: list}
 	s.store[key] = entry
-	s.cond.Broadcast()
+	s.listCond.Broadcast()
 
 	return encodeInteger(len(list))
 }
@@ -98,7 +98,7 @@ func (s *server) handleLpush(args []string) []byte {
 	list = append(newValues, list...)
 	entry.value = redisValue{typ: listValue, list: list}
 	s.store[key] = entry
-	s.cond.Broadcast()
+	s.listCond.Broadcast()
 
 	return encodeInteger(len(list))
 }
@@ -209,7 +209,7 @@ func (s *server) handleBlpop(args []string) []byte {
 
 		timer := time.AfterFunc(time.Until(deadline), func() {
 			s.mu.Lock()
-			s.cond.Broadcast()
+			s.listCond.Broadcast()
 			s.mu.Unlock()
 		})
 
@@ -234,7 +234,7 @@ func (s *server) handleBlpop(args []string) []byte {
 			return encodeNullArray()
 		}
 
-		s.cond.Wait()
+		s.listCond.Wait()
 	}
 }
 

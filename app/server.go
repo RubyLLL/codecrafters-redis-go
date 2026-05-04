@@ -13,10 +13,11 @@ import (
 )
 
 type server struct {
-	store map[string]storeEntry
-	mu    sync.RWMutex
-	cond  *sync.Cond
-	now   func() time.Time
+	store      map[string]storeEntry
+	mu         sync.RWMutex
+	streamCond *sync.Cond
+	listCond   *sync.Cond
+	now        func() time.Time
 }
 
 func newServer() *server {
@@ -24,7 +25,8 @@ func newServer() *server {
 		store: make(map[string]storeEntry),
 		now:   time.Now,
 	}
-	s.cond = sync.NewCond(&s.mu)
+	s.listCond = sync.NewCond(&s.mu)
+	s.streamCond = sync.NewCond(&s.mu)
 	return s
 }
 
