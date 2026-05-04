@@ -23,6 +23,7 @@ func (s *server) handleExec(args []string) []byte {
 	for _, command := range s.queue {
 		result = append(result, s.executeCommand(command))
 	}
+	s.transactional = false
 
 	return encodeRawArray(result)
 }
