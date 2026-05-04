@@ -1,5 +1,7 @@
 package main
 
+import "strconv"
+
 func (s *server) handlePing(args []string) []byte {
 	if len(args) > 1 {
 		return encodeWrongNumberOfArguments("ping")
@@ -65,10 +67,19 @@ func (s *server) handleSet(args []string) []byte {
 		return encodeWrongNumberOfArguments("set")
 	}
 
-	v := redisValue{
-		typ: stringValue,
-		str: args[1],
+	var v redisValue
+	if num, err := strconv.Atoi(args[1]); err == nil {
+		v = redisValue{
+			typ:    intValue,
+			number: num,
+		}
+	} else {
+		v = redisValue{
+			typ: stringValue,
+			str: args[1],
+		}
 	}
+
 	entry := storeEntry{value: v}
 	if len(args) == 4 {
 		expiresAt, err := s.parseSetExpiry(args[2], args[3])

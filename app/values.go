@@ -8,6 +8,7 @@ const (
 	stringValue valueType = iota
 	listValue
 	streamValue
+	intValue
 )
 
 type redisValue struct {
@@ -15,6 +16,7 @@ type redisValue struct {
 	str    string
 	list   []string
 	stream stream
+	number int
 }
 
 type storeEntry struct {

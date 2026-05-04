@@ -19,6 +19,7 @@ var commandHandlers = map[string]commandHandler{
 	"XADD":   (*server).handleXadd,
 	"XRANGE": (*server).handleXrange,
 	"XREAD":  (*server).handleXread,
+	"INCR":   (*server).handleIncr,
 }
 
 func (s *server) handleCommand(command []string) []byte {
