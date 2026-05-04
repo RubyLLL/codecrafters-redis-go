@@ -13,11 +13,15 @@ import (
 )
 
 type server struct {
-	store         map[string]storeEntry
-	mu            sync.RWMutex
-	streamCond    *sync.Cond
-	listCond      *sync.Cond
-	now           func() time.Time
+	store      map[string]storeEntry
+	mu         sync.RWMutex
+	streamCond *sync.Cond
+	listCond   *sync.Cond
+	now        func() time.Time
+}
+
+type clientSession struct {
+	server        *server
 	transactional bool
 	queue         [][]string
 }
@@ -36,6 +40,7 @@ func (s *server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
+	client := &clientSession{server: s}
 
 	for {
 		command, err := readRESPCommand(reader)
@@ -46,7 +51,7 @@ func (s *server) handleConnection(conn net.Conn) {
 			return
 		}
 
-		response := s.handleCommand(command)
+		response := client.handleCommand(command)
 		if _, err := conn.Write(response); err != nil {
 			return
 		}

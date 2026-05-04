@@ -23,6 +23,10 @@ var commandHandlers = map[string]commandHandler{
 }
 
 func (s *server) handleCommand(command []string) []byte {
+	return s.executeCommand(command)
+}
+
+func (c *clientSession) handleCommand(command []string) []byte {
 	if len(command) == 0 {
 		return encodeSimpleError(errEmptyCommand)
 	}
@@ -31,22 +35,24 @@ func (s *server) handleCommand(command []string) []byte {
 
 	switch name {
 	case "MULTI":
-		return s.handleMulti(command[1:])
+		return c.handleMulti(command[1:])
 	case "EXEC":
-		return s.handleExec(command[1:])
-	case "GET":
-		return s.handleGet(command[1:])
+		return c.handleExec(command[1:])
 	}
 
-	if s.transactional {
-		s.queue = append(s.queue, append([]string(nil), command...))
+	if c.transactional {
+		c.queue = append(c.queue, append([]string(nil), command...))
 		return encodeSimpleString(QUEUED)
 	}
 
-	return s.executeCommand(command)
+	return c.server.executeCommand(command)
 }
 
 func (s *server) executeCommand(command []string) []byte {
+	if len(command) == 0 {
+		return encodeSimpleError(errEmptyCommand)
+	}
+
 	name := strings.ToUpper(command[0])
 	handler, ok := commandHandlers[name]
 	if !ok {

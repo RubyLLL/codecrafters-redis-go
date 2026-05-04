@@ -1,29 +1,37 @@
 package main
 
-func (s *server) handleMulti(args []string) []byte {
+func (c *clientSession) handleMulti(args []string) []byte {
 	if len(args) != 0 {
 		return encodeWrongNumberOfArguments("multi")
 	}
+	if c.transactional {
+		return encodeSimpleError(errNestedMulti)
+	}
 
-	s.transactional = true
+	c.transactional = true
+	c.queue = nil
 
 	return encodeSimpleString(OK)
 }
 
-func (s *server) handleExec(args []string) []byte {
+func (c *clientSession) handleExec(args []string) []byte {
 	if len(args) != 0 {
-		s.transactional = false
+		c.transactional = false
+		c.queue = nil
 		return encodeSimpleError(errExecAbort + " wrong number of arguments for 'exec' command")
 	}
-	if s.transactional != true {
+	if !c.transactional {
 		return encodeSimpleError(errExecWithoutMulti)
 	}
 
-	result := make([][]byte, 0, len(s.queue))
-	for _, command := range s.queue {
-		result = append(result, s.executeCommand(command))
+	queued := c.queue
+	c.queue = nil
+	c.transactional = false
+
+	result := make([][]byte, 0, len(queued))
+	for _, command := range queued {
+		result = append(result, c.server.executeCommand(command))
 	}
-	s.transactional = false
 
 	return encodeRawArray(result)
 }

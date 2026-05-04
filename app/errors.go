@@ -21,6 +21,7 @@ const (
 	errInvalidStreamTimeOut = "ERR timeout is not an integer or out of range"
 	errExecWithoutMulti     = "ERR EXEC without MULTI"
 	errExecAbort            = "EXECABORT Transaction discarded because of:"
+	errNestedMulti          = "ERR MULTI calls can not be nested"
 )
 
 func encodeWrongNumberOfArguments(command string) []byte {
