@@ -19,6 +19,8 @@ const (
 	errStreamZeroID         = "ERR The ID specified in XADD must be greater than 0-0"
 	errUnbalancedXread      = "ERR Unbalanced 'xread' list of streams: for each stream key an ID, '+' or '$' must be specified"
 	errInvalidStreamTimeOut = "ERR timeout is not an integer or out of range"
+	errExecWithoutMulti     = "ERR EXEC without MULTI"
+	errExecAbort            = "EXECABORT Transaction discarded because of:"
 )
 
 func encodeWrongNumberOfArguments(command string) []byte {
