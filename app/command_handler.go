@@ -34,6 +34,8 @@ func (s *server) handleCommand(command []string) []byte {
 		return s.handleMulti(command[1:])
 	case "EXEC":
 		return s.handleExec(command[1:])
+	case "GET":
+		return s.handleGet(command[1:])
 	}
 
 	if s.transactional {
